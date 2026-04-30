@@ -1,81 +1,113 @@
-import express from 'express';
+import { WebSocketServer } from 'ws';
 import http from 'http';
-import { Server } from 'socket.io';
-import cors from 'cors';
 
-const app = express();
-const corsOptions = {
-  origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-};
+// Create HTTP server for WebSocket
+const server = http.createServer();
 
-app.use(cors(corsOptions));
-
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: corsOptions,
+// Create WebSocket server
+const wss = new WebSocketServer({ 
+  server,
+  perMessageDeflate: false
 });
 
-const TARGET = 2;
-let eventLaunched = false;
-let eventLaunchedAt = null;
-
-// Map of clientId -> { launched: boolean }
-const participants = new Map();
-
-function getState() {
-  let launchedCount = 0;
-  for (const p of participants.values()) {
-    if (p.launched) launchedCount++;
-  }
-  
-  if (launchedCount >= TARGET && !eventLaunched) {
-    eventLaunched = true;
-    eventLaunchedAt = new Date().toISOString();
-  }
-
-  return {
-    event: {
-      id: 1,
-      target: TARGET,
-      launched: eventLaunched,
-      launched_at: eventLaunchedAt,
-    },
-    launchedCount,
-    joinedCount: participants.size,
-  };
-}
-
-io.on('connection', (socket) => {
-  // Send current state on connection
-  socket.emit('state_update', getState());
-
-  socket.on('join', (clientId) => {
-    if (!participants.has(clientId)) {
-      participants.set(clientId, { launched: false });
-      io.emit('state_update', getState());
-    }
-  });
-
-  socket.on('launch', (clientId) => {
-    const participant = participants.get(clientId);
-    if (participant && !participant.launched) {
-      participant.launched = true;
-      io.emit('state_update', getState());
-    }
-  });
-
-  socket.on('check_launched', (clientId, callback) => {
-    const participant = participants.get(clientId);
-    callback({ launched: participant ? participant.launched : false });
-  });
-
-  // Client disconnecting doesn't necessarily remove them from participants in this logic, 
-  // since it's tied to clientId in local storage.
-});
-
+// Start server on port from env or 3001
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server listening on port ${PORT}`);
+  console.log(`🚀 WebSocket server running on port ${PORT}`);
 });
+
+const TARGET = 2; // User requested 2 instead of 20
+
+let launchState = {
+  clickCount: 0,
+  isLaunched: false,
+  participants: [],
+  launchTime: null,
+  revealComplete: false,
+  target: TARGET
+};
+
+// Enhanced logging
+function logState(action) {
+  console.log(`[${new Date().toISOString()}] ${action} - Count: ${launchState.clickCount}, Launched: ${launchState.isLaunched}, Participants: ${launchState.participants.length}`);
+}
+
+// Broadcast to all connected clients
+function broadcast(data) {
+  const message = JSON.stringify(data);
+  wss.clients.forEach(client => {
+    if (client.readyState === 1) { // WebSocket.OPEN
+      client.send(message);
+    }
+  });
+  console.log(`Broadcasting to ${wss.clients.size} clients`);
+}
+
+// Handle client connections
+wss.on('connection', (ws) => {
+  console.log(`New client connected. Total clients: ${wss.clients.size}`);
+  
+  // Send current state to new client
+  ws.send(JSON.stringify(launchState));
+  
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      
+      if (data.type === 'launch_click') {
+        // Only accept clicks if not already launched and user hasn't clicked
+        if (!launchState.isLaunched && !launchState.participants.includes(data.userId)) {
+          launchState.participants.push(data.userId);
+          launchState.clickCount = launchState.participants.length;
+          
+          // Check if we've reached the target clicks
+          if (launchState.clickCount >= TARGET) {
+            launchState.isLaunched = true;
+            launchState.launchTime = new Date().toISOString();
+          }
+          
+          logState(`Click from ${data.userId.substring(0, 8)}`);
+          broadcast(launchState);
+        }
+      } else if (data.type === 'check_launched') {
+        ws.send(JSON.stringify({ 
+          type: 'check_response', 
+          launched: launchState.participants.includes(data.userId) 
+        }));
+      } else if (data.type === 'reveal_now') {
+        launchState.revealComplete = true;
+        logState('Reveal completed');
+        broadcast(launchState);
+      } else if (data.type === 'reset') {
+        // Reset the launch state
+        launchState = {
+          clickCount: 0,
+          isLaunched: false,
+          participants: [],
+          launchTime: null,
+          revealComplete: false,
+          target: TARGET
+        };
+        logState('Launch reset');
+        broadcast(launchState);
+      }
+    } catch (error) {
+      console.error('Error processing message:', error);
+    }
+  });
+  
+  ws.on('close', () => {
+    console.log(`Client disconnected. Total clients: ${wss.clients.size}`);
+  });
+  
+  ws.on('error', (error) => {
+    console.error('WebSocket error:', error);
+  });
+});
+
+// Periodic status logging
+setInterval(() => {
+  if (wss.clients.size > 0) {
+    console.log(`📈 Status: ${wss.clients.size} clients connected, ${launchState.clickCount}/${TARGET} participants`);
+  }
+}, 30000);

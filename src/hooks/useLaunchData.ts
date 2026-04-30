@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { io, Socket } from "socket.io-client";
 
 export type LaunchEvent = {
   id: number;
@@ -9,15 +8,14 @@ export type LaunchEvent = {
 };
 
 // Singleton socket connection
-let socket: Socket | null = null;
-// Use localhost for local dev, or dynamic host based on window.location
-const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || "https://recspolaunch-production.up.railway.app/";
+let socket: WebSocket | null = null;
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "wss://recspolaunch-production.up.railway.app";
 
 function getSocket() {
-  if (!socket) {
-    socket = io(SOCKET_URL, {
-      transports: ['websocket', 'polling']
-    });
+  if (!socket || socket.readyState === WebSocket.CLOSED) {
+    // Determine connection URL correctly for local vs production
+    const url = BACKEND_URL.startsWith('http') ? BACKEND_URL.replace(/^http/, 'ws') : BACKEND_URL;
+    socket = new WebSocket(url);
   }
   return socket;
 }
@@ -40,19 +38,31 @@ export function useLaunchData() {
   useEffect(() => {
     const s = getSocket();
     
-    const handleStateUpdate = (data: any) => {
-      setEvent(data.event);
-      setLaunchedCount(data.launchedCount);
-      setJoinedCount(data.joinedCount);
+    const handleMessage = (msg: MessageEvent) => {
+      try {
+        const data = JSON.parse(msg.data);
+        
+        // Ignore targeted direct check_response messages in the global handler
+        if (data.type === 'check_response') return;
+        
+        // Update global state based on the broadcasted launchState
+        setEvent({
+          id: 1,
+          target: data.target || 2,
+          launched: data.isLaunched || false,
+          launched_at: data.launchTime || null
+        });
+        setLaunchedCount(data.clickCount || 0);
+        setJoinedCount(data.participants ? data.participants.length : 0);
+      } catch (error) {
+        console.error('Error parsing WebSocket message:', error);
+      }
     };
 
-    s.on("state_update", handleStateUpdate);
-
-    // Fetch initial state if we don't have it yet, though server sends it on connect
-    // We can also emit a "get_state" event if needed.
+    s.addEventListener("message", handleMessage);
 
     return () => {
-      s.off("state_update", handleStateUpdate);
+      s.removeEventListener("message", handleMessage);
     };
   }, []);
 
@@ -61,32 +71,59 @@ export function useLaunchData() {
 
 export async function joinEvent() {
   const clientId = getClientId();
-  const s = getSocket();
-  s.emit("join", clientId);
+  // With the new reference backend, joining is implicit upon connection,
+  // but we can ensure socket is created here.
+  getSocket();
   return clientId;
 }
 
 export async function pressLaunch() {
   const clientId = getClientId();
   const s = getSocket();
-  s.emit("launch", clientId);
+  
+  const payload = JSON.stringify({ type: 'launch_click', userId: clientId });
+  
+  if (s.readyState === WebSocket.OPEN) {
+    s.send(payload);
+  } else {
+    s.addEventListener("open", () => {
+      s.send(payload);
+    }, { once: true });
+  }
 }
 
 export async function checkHasLaunched(): Promise<boolean> {
   const clientId = getClientId();
   const s = getSocket();
+  
   return new Promise((resolve) => {
-    // If not connected yet, we could have a timeout or wait for connection
-    if (s.connected) {
-      s.emit("check_launched", clientId, (response: any) => {
-        resolve(response.launched);
-      });
+    const handler = (msg: MessageEvent) => {
+      try {
+        const data = JSON.parse(msg.data);
+        
+        // If it's a direct response to our check
+        if (data.type === 'check_response') {
+          s.removeEventListener('message', handler);
+          resolve(data.launched);
+        } 
+        // If it's a broadcast state, we can also derive the answer
+        else if (data.participants !== undefined) {
+          s.removeEventListener('message', handler);
+          resolve(data.participants.includes(clientId));
+        }
+      } catch (error) {}
+    };
+    
+    s.addEventListener('message', handler);
+    
+    const payload = JSON.stringify({ type: 'check_launched', userId: clientId });
+    
+    if (s.readyState === WebSocket.OPEN) {
+      s.send(payload);
     } else {
-      s.once("connect", () => {
-        s.emit("check_launched", clientId, (response: any) => {
-          resolve(response.launched);
-        });
-      });
+      s.addEventListener("open", () => {
+        s.send(payload);
+      }, { once: true });
     }
   });
 }
