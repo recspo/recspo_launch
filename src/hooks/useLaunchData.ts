@@ -11,11 +11,13 @@ export type LaunchEvent = {
 // Singleton socket connection
 let socket: Socket | null = null;
 // Use localhost for local dev, or dynamic host based on window.location
-const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || "https://recspolaunch-production.up.railway.app/";
 
 function getSocket() {
   if (!socket) {
-    socket = io(SOCKET_URL);
+    socket = io(SOCKET_URL, {
+      transports: ['websocket', 'polling']
+    });
   }
   return socket;
 }
