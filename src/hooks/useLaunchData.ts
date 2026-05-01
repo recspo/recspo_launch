@@ -48,7 +48,7 @@ export function useLaunchData() {
         // Update global state based on the broadcasted launchState
         setEvent({
           id: 1,
-          target: data.target || 2,
+          target: data.target || 3,
           launched: data.isLaunched || false,
           launched_at: data.launchTime || null
         });

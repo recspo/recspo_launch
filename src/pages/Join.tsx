@@ -28,7 +28,7 @@ const Join = () => {
     }
   }, [event?.launched, navigate]);
 
-  const target = event?.target ?? 10;
+  const target = event?.target ?? 3;
   const pct = Math.min(100, (launchedCount / target) * 100);
 
   if (event?.launched) {

@@ -23,7 +23,7 @@ const Screen = () => {
     }
   }, [event?.launched, navigate]);
 
-  const target = event?.target ?? 10;
+  const target = event?.target ?? 3;
 
   if (event?.launched) {
     return (
