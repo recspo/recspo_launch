@@ -11,7 +11,7 @@ const Screen = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    setJoinUrl(`${window.location.origin}/`);
+    setJoinUrl("https://recspo-launch26.vercel.app/");
   }, []);
 
   useEffect(() => {
